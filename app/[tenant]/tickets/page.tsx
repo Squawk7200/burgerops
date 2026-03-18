@@ -71,7 +71,7 @@ export default async function TicketsPage({
         [tenantRow.id]
     );
 
-    const tickets = ticketsResult.rows;
+    const tickets: TicketRow[] = ticketsResult.rows;
 
     return (
         <section className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">

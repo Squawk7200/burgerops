@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
+import { revalidatePath } from 'next/cache';
 import pool from '../../../../lib/db';
 
 type TicketDetailRow = {
@@ -14,6 +15,13 @@ type TicketDetailRow = {
     location_name: string;
     tenant_name: string;
     tenant_slug: string;
+    vendor_id: string | null;
+    vendor_name: string | null;
+};
+
+type VendorRow = {
+    id: string;
+    name: string;
 };
 
 function formatDate(value: string | null) {
@@ -43,6 +51,15 @@ function badgeClasses(value: string) {
     return 'bg-slate-100 text-slate-700 ring-slate-200';
 }
 
+const statusOptions = [
+    'open',
+    'vendor_assigned',
+    'scheduled',
+    'in_progress',
+    'resolved',
+    'closed',
+];
+
 export default async function TicketDetailPage({
     params,
 }: {
@@ -61,14 +78,18 @@ export default async function TicketDetailPage({
       tickets.created_at,
       tickets.due_at,
       tickets.resolved_at,
+      tickets.vendor_id,
       locations.name AS location_name,
       tenants.name AS tenant_name,
-      tenants.slug AS tenant_slug
+      tenants.slug AS tenant_slug,
+      vendors.name AS vendor_name
     FROM tickets
     JOIN locations
       ON tickets.location_id = locations.id
     JOIN tenants
       ON tickets.tenant_id = tenants.id
+    LEFT JOIN vendors
+      ON tickets.vendor_id = vendors.id
     WHERE tenants.slug = $1
       AND tickets.id = $2
     LIMIT 1
@@ -80,6 +101,102 @@ export default async function TicketDetailPage({
 
     if (!ticket) {
         notFound();
+    }
+
+    const vendorsResult = await pool.query<VendorRow>(
+        `
+    SELECT id, name
+    FROM vendors
+    WHERE tenant_id = (
+      SELECT id
+      FROM tenants
+      WHERE slug = $1
+      LIMIT 1
+    )
+    ORDER BY name ASC
+    `,
+        [tenant]
+    );
+
+    const vendors: VendorRow[] = vendorsResult.rows;
+
+    async function updateTicketStatus(formData: FormData) {
+        'use server';
+
+        const newStatus = String(formData.get('status') ?? '').trim();
+
+        if (!statusOptions.includes(newStatus)) {
+            throw new Error('Invalid status value.');
+        }
+
+        await pool.query(
+            `
+      UPDATE tickets
+      SET
+        status = $1,
+        resolved_at = CASE
+          WHEN $2::text IN ('resolved', 'closed') AND resolved_at IS NULL THEN NOW()
+          WHEN $3::text NOT IN ('resolved', 'closed') THEN NULL
+          ELSE resolved_at
+        END
+      WHERE id = $4
+      `,
+            [newStatus, newStatus, newStatus, ticket.id]
+        );
+
+        revalidatePath(`/${ticket.tenant_slug}/dashboard`);
+        revalidatePath(`/${ticket.tenant_slug}/tickets`);
+        revalidatePath(`/${ticket.tenant_slug}/tickets/${ticket.id}`);
+
+        redirect(`/${ticket.tenant_slug}/tickets/${ticket.id}`);
+    }
+
+    async function updateTicketVendor(formData: FormData) {
+        'use server';
+
+        const vendorId = String(formData.get('vendor_id') ?? '').trim();
+
+        if (vendorId === '') {
+            await pool.query(
+                `
+        UPDATE tickets
+        SET vendor_id = NULL
+        WHERE id = $1
+        `,
+                [ticket.id]
+            );
+        } else {
+            const vendorCheck = await pool.query<{ id: string }>(
+                `
+        SELECT vendors.id
+        FROM vendors
+        JOIN tenants ON vendors.tenant_id = tenants.id
+        WHERE vendors.id = $1
+          AND tenants.slug = $2
+        LIMIT 1
+        `,
+                [vendorId, ticket.tenant_slug]
+            );
+
+            if (!vendorCheck.rows[0]) {
+                throw new Error('Invalid vendor selection.');
+            }
+
+            await pool.query(
+                `
+        UPDATE tickets
+        SET vendor_id = $1
+        WHERE id = $2
+        `,
+                [vendorId, ticket.id]
+            );
+        }
+
+        revalidatePath(`/${ticket.tenant_slug}/dashboard`);
+        revalidatePath(`/${ticket.tenant_slug}/tickets`);
+        revalidatePath(`/${ticket.tenant_slug}/tickets/${ticket.id}`);
+
+        redirect(`/${ticket.tenant_slug}/tickets/${ticket.id}`);
     }
 
     return (
@@ -153,6 +270,83 @@ export default async function TicketDetailPage({
                     </div>
                 </header>
 
+                <section className="mb-6 grid gap-6 lg:grid-cols-2">
+                    <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+                        <h2 className="mb-4 text-xl font-semibold">Update Status</h2>
+
+                        <form
+                            action={updateTicketStatus}
+                            className="flex flex-col gap-4 sm:flex-row sm:items-end"
+                        >
+                            <div className="w-full max-w-xs">
+                                <label
+                                    htmlFor="status"
+                                    className="mb-2 block text-sm font-medium text-slate-700"
+                                >
+                                    Status
+                                </label>
+                                <select
+                                    id="status"
+                                    name="status"
+                                    defaultValue={ticket.status}
+                                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-500 focus:outline-none"
+                                >
+                                    {statusOptions.map((status) => (
+                                        <option key={status} value={status}>
+                                            {status}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <button
+                                type="submit"
+                                className="inline-flex rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+                            >
+                                Update Status
+                            </button>
+                        </form>
+                    </div>
+
+                    <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+                        <h2 className="mb-4 text-xl font-semibold">Assign Vendor</h2>
+
+                        <form
+                            action={updateTicketVendor}
+                            className="flex flex-col gap-4 sm:flex-row sm:items-end"
+                        >
+                            <div className="w-full max-w-xs">
+                                <label
+                                    htmlFor="vendor_id"
+                                    className="mb-2 block text-sm font-medium text-slate-700"
+                                >
+                                    Vendor
+                                </label>
+                                <select
+                                    id="vendor_id"
+                                    name="vendor_id"
+                                    defaultValue={ticket.vendor_id ?? ''}
+                                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-500 focus:outline-none"
+                                >
+                                    <option value="">Unassigned</option>
+                                    {vendors.map((vendor) => (
+                                        <option key={vendor.id} value={vendor.id}>
+                                            {vendor.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <button
+                                type="submit"
+                                className="inline-flex rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+                            >
+                                Save Vendor
+                            </button>
+                        </form>
+                    </div>
+                </section>
+
                 <section className="grid gap-6 lg:grid-cols-2">
                     <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
                         <h2 className="mb-4 text-xl font-semibold">Ticket Information</h2>
@@ -169,6 +363,13 @@ export default async function TicketDetailPage({
                                 <dt className="text-sm font-medium text-slate-500">Location</dt>
                                 <dd className="mt-1 text-base text-slate-900">
                                     {ticket.location_name}
+                                </dd>
+                            </div>
+
+                            <div>
+                                <dt className="text-sm font-medium text-slate-500">Vendor</dt>
+                                <dd className="mt-1 text-base text-slate-900">
+                                    {ticket.vendor_name ?? 'Unassigned'}
                                 </dd>
                             </div>
 
