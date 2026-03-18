@@ -75,11 +75,20 @@ export default async function TicketsPage({
 
     return (
         <section className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-            <div className="mb-5">
-                <h2 className="text-2xl font-semibold">Incident Queue</h2>
-                <p className="mt-1 text-sm text-slate-500">
-                    Open and historical incidents for {tenantRow.name}.
-                </p>
+            <div className="mb-5 flex items-start justify-between gap-4">
+                <div>
+                    <h2 className="text-2xl font-semibold">Incident Queue</h2>
+                    <p className="mt-1 text-sm text-slate-500">
+                        Open and historical incidents for {tenantRow.name}.
+                    </p>
+                </div>
+
+                <Link
+                    href={`/${tenantRow.slug}/tickets/new`}
+                    className="inline-flex rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+                >
+                    New Ticket
+                </Link>
             </div>
 
             <div className="overflow-hidden rounded-xl border border-slate-200">
