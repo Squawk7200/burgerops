@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import pool from '../../../lib/db';
 import { notFound } from 'next/navigation';
 
@@ -85,29 +86,71 @@ export default async function TicketsPage({
                 <table className="min-w-full divide-y divide-slate-200">
                     <thead className="bg-slate-100">
                         <tr>
-                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Ticket</th>
-                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Location</th>
-                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Category</th>
-                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Vendor</th>
-                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Status</th>
-                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Priority</th>
-                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Opened</th>
-                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Due</th>
-                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Resolved</th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">
+                                Ticket
+                            </th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">
+                                Location
+                            </th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">
+                                Category
+                            </th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">
+                                Vendor
+                            </th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">
+                                Status
+                            </th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">
+                                Priority
+                            </th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">
+                                Opened
+                            </th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">
+                                Due
+                            </th>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">
+                                Resolved
+                            </th>
                         </tr>
                     </thead>
+
                     <tbody className="divide-y divide-slate-200 bg-white">
                         {tickets.map((ticket) => (
-                            <tr key={ticket.id}>
-                                <td className="px-4 py-3 text-sm font-medium text-slate-900">{ticket.title}</td>
-                                <td className="px-4 py-3 text-sm text-slate-600">{ticket.location_name}</td>
-                                <td className="px-4 py-3 text-sm text-slate-600">{ticket.category}</td>
-                                <td className="px-4 py-3 text-sm text-slate-600">{ticket.vendor_name ?? 'Unassigned'}</td>
-                                <td className="px-4 py-3 text-sm text-slate-600">{ticket.status}</td>
-                                <td className="px-4 py-3 text-sm text-slate-600">{ticket.priority}</td>
-                                <td className="px-4 py-3 text-sm text-slate-600">{formatDate(ticket.created_at)}</td>
-                                <td className="px-4 py-3 text-sm text-slate-600">{formatDate(ticket.due_at)}</td>
-                                <td className="px-4 py-3 text-sm text-slate-600">{formatDate(ticket.resolved_at)}</td>
+                            <tr key={ticket.id} className="hover:bg-slate-50">
+                                <td className="px-4 py-3 text-sm font-medium text-slate-900">
+                                    <Link
+                                        href={`/${tenantRow.slug}/tickets/${ticket.id}`}
+                                        className="hover:text-slate-700 hover:underline"
+                                    >
+                                        {ticket.title}
+                                    </Link>
+                                </td>
+                                <td className="px-4 py-3 text-sm text-slate-600">
+                                    {ticket.location_name}
+                                </td>
+                                <td className="px-4 py-3 text-sm text-slate-600">
+                                    {ticket.category}
+                                </td>
+                                <td className="px-4 py-3 text-sm text-slate-600">
+                                    {ticket.vendor_name ?? 'Unassigned'}
+                                </td>
+                                <td className="px-4 py-3 text-sm text-slate-600">
+                                    {ticket.status}
+                                </td>
+                                <td className="px-4 py-3 text-sm text-slate-600">
+                                    {ticket.priority}
+                                </td>
+                                <td className="px-4 py-3 text-sm text-slate-600">
+                                    {formatDate(ticket.created_at)}
+                                </td>
+                                <td className="px-4 py-3 text-sm text-slate-600">
+                                    {formatDate(ticket.due_at)}
+                                </td>
+                                <td className="px-4 py-3 text-sm text-slate-600">
+                                    {formatDate(ticket.resolved_at)}
+                                </td>
                             </tr>
                         ))}
                     </tbody>
