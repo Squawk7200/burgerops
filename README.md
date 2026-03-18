@@ -6,7 +6,7 @@ It simulates a real-world system where restaurant teams can track maintenance is
 
 ---
 
-## 🚀 Tech Stack
+## Tech Stack
 
 - Next.js (App Router)
 - TypeScript
@@ -15,7 +15,7 @@ It simulates a real-world system where restaurant teams can track maintenance is
 
 ---
 
-## 🧱 Core Features
+##  Core Features
 
 - Multi-tenant routing (`/[tenant]/...`)
 - Tenant-scoped dashboards
@@ -26,7 +26,7 @@ It simulates a real-world system where restaurant teams can track maintenance is
 
 ---
 
-## 🧠 Architecture Highlights
+## Architecture Highlights
 
 - Dynamic tenant routing using Next.js App Router
 - Data modeled around real business entities:
@@ -39,7 +39,7 @@ It simulates a real-world system where restaurant teams can track maintenance is
 
 ---
 
-## 🔄 In Progress
+## In Progress
 
 - Ticket detail pages
 - Create ticket workflow
@@ -49,7 +49,7 @@ It simulates a real-world system where restaurant teams can track maintenance is
 
 ---
 
-## 🎯 Project Goal
+## Project Goal
 
 To demonstrate the design and development of a real-world multi-tenant SaaS application, including:
 - scalable architecture
@@ -58,7 +58,7 @@ To demonstrate the design and development of a real-world multi-tenant SaaS appl
 
 ---
 
-## 🧪 Local Development
+## Local Development
 
 ```bash
 npm install
