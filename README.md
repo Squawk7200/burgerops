@@ -43,9 +43,13 @@ This structure allows BurgerOps to simulate a realistic operations environment s
 
 Dynamic routing using `/[tenant]/...` allows each business to operate in isolation while sharing the same application.
 
+---
+
 ### Location Management
 
 Each tenant contains multiple locations, each with its own operational context.
+
+---
 
 ### Asset Tracking
 
@@ -56,6 +60,8 @@ Assets are tied to specific locations and include:
 * Status
 * Installation date
 
+---
+
 ### Vendor Management
 
 Vendors belong to a tenant and can service multiple locations. Each vendor includes:
@@ -64,6 +70,8 @@ Vendors belong to a tenant and can service multiple locations. Each vendor inclu
 * Contact information
 * SLA level
 * Active status
+
+---
 
 ### Ticket System
 
@@ -78,6 +86,8 @@ Tickets include:
 * Vendor (optional)
 * Due date
 
+---
+
 ### Ticket Creation Workflow
 
 * Server-side validation ensures data integrity
@@ -88,11 +98,54 @@ Tickets include:
   * `open`
   * `vendor_assigned`
 
-### Ticket Updates
+---
 
-Each ticket automatically generates an entry in `ticket_updates` when created, forming the basis for a future activity log.
+### Ticket Detail System (Enhanced)
 
-### Work Orders
+The ticket detail page now acts as the operational control center.
+
+Includes:
+
+* Full ticket metadata display
+* Status management (dropdown update)
+* Vendor assignment / reassignment
+* Timeline tracking
+* Work order creation and visibility
+
+Supported statuses:
+
+* `open`
+* `vendor_assigned`
+* `scheduled`
+* `in_progress`
+* `resolved`
+* `closed`
+
+---
+
+### Activity Timeline (New)
+
+Each ticket now maintains a full activity log.
+
+Tracked events include:
+
+* Ticket creation
+* Status changes
+* Vendor assignment / removal
+* Work order creation
+* System-triggered updates
+
+All activity is stored in:
+
+```
+ticket_updates
+```
+
+This creates a complete audit trail of ticket lifecycle events.
+
+---
+
+### Work Orders (Enhanced)
 
 Work orders are tied to tickets and vendors and track:
 
@@ -100,6 +153,27 @@ Work orders are tied to tickets and vendors and track:
 * Labor cost
 * Parts cost
 * Status
+* Notes
+
+Work orders can now be created directly from the ticket detail page.
+
+---
+
+### Automated Workflow Logic (New)
+
+The system now includes state-driven behavior.
+
+When a work order is created:
+
+* `scheduled` → ticket status becomes `scheduled`
+* `in_progress` → ticket status becomes `in_progress`
+
+Additionally:
+
+* These changes are automatically logged in the activity timeline
+* Tickets now reflect real operational state without manual updates
+
+This introduces behavior similar to real-world operations platforms.
 
 ---
 
@@ -112,6 +186,8 @@ The application separates responsibilities between server and client components.
 * Database queries
 * Data validation
 * Ticket creation (server actions)
+* Work order creation
+* Automated status updates
 
 ### Client Responsibilities
 
@@ -148,7 +224,9 @@ Tenant
 Tenant
 → Vendors
 
-This structure enforces clear boundaries and reflects real-world operational systems.
+Tickets
+→ Work Orders
+→ Updates (timeline)
 
 ---
 
@@ -162,159 +240,30 @@ The database is seeded with a large dataset including:
 * Hundreds of assets
 * Hundreds of tickets and work orders
 
-The dataset is designed to simulate realistic operational scenarios across multiple restaurant brands.
-
 Seed file:
 
-* `seed.sql` (reset-safe dataset)
+* `seed.sql`
 
 ---
 
 ## Setup
 
-Install dependencies:
-
 ```bash
 npm install
-```
-
-Run development server:
-
-```bash
 npm run dev
 ```
-
-Open in browser:
-
-```
-http://localhost:3000
-```
-
----
-
-## Database Configuration
-
-The application connects to PostgreSQL via:
-
-```
-DATABASE_URL
-```
-
-Database is hosted on Neon.
-
----
-
-## Current Functionality
-
-* Multi-tenant navigation
-* Tenant dashboards
-* Ticket list view
-* Ticket detail page
-* Ticket creation workflow
-* Server-side validation
-* Asset validation per location
-* Vendor validation per tenant
-* Ticket update logging
-* Dynamic asset filtering in form
 
 ---
 
 ## Roadmap
 
-### Authentication and Access Control
-
-* User login and session handling
-* Tenant-based access restrictions
-* Role-based permissions
-
-### Error Handling and Validation
-
-* Improved user-facing error messages
-* Client-side validation feedback
-* Robust server-side error handling
-
-### Ticket System Enhancements
-
-* Edit ticket workflow
-* Status update controls
-* Assignment tracking
-* Ticket comments and activity history
-
-### Analytics and Reporting
-
-* KPI dashboards per tenant
-* Ticket trends and metrics
-* Vendor performance tracking
-
-### API Layer
-
-* REST or GraphQL API
-* External integrations
-
----
-
-## Known Limitations
-
-* Asset names are currently duplicated across locations
-  Planned improvement: make asset names location-specific in seed data
-
-* No authentication implemented yet
-  Application is currently open for demo purposes
-
-* Limited UI error feedback
-  Errors are handled server-side but not fully surfaced to users
-
----
-
-## What This Project Demonstrates
-
-BurgerOps showcases practical, real-world software development beyond basic tutorials.
-
-### Full-Stack Development
-
-* End-to-end feature development from database to UI
-* Integration of server actions with database operations
-* Clear separation of concerns between layers
-
-### Scalable Architecture
-
-* Multi-tenant design with data isolation
-* Relational modeling with meaningful constraints
-* Maintainable component structure
-
-### Database Design
-
-* Normalized schema with multiple relationships
-* Enforcement of data integrity across entities
-
-### Backend Logic
-
-* Server-side validation for all critical operations
-* Safe handling of optional relationships
-* Consistent data insertion patterns
-
-### Product-Oriented Thinking
-
-* Built around a real operational use case
-* Structured workflows and system behavior
-* Incremental, roadmap-driven development
-
-### Modern Development Practices
-
-* Next.js App Router architecture
-* TypeScript usage
-* Cloud database integration
-
-### Iterative Development
-
-* Continuous refactoring and improvement
-* Transition from monolithic to component-based design
-* Built with future expansion in mind
-
-This project reflects the ability to design, build, and evolve a production-style SaaS application.
+* Lock ticket status based on work orders
+* Build dashboard metrics
+* Authentication and roles
+* Improved validation and error handling
 
 ---
 
 ## Notes
 
-This project is actively evolving. Features and structure will continue to improve as additional capabilities are implemented.
+This project is actively evolving.

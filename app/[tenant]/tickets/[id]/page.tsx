@@ -39,9 +39,36 @@ type TicketUpdateRow = {
     created_at: string;
 };
 
+type WorkOrderRow = {
+    id: string;
+    vendor_id: string | null;
+    vendor_name: string | null;
+    scheduled_for: string | null;
+    completed_at: string | null;
+    status: string;
+    labor_cost: string | number | null;
+    parts_cost: string | number | null;
+    notes: string | null;
+    created_at: string;
+};
+
 function formatDate(value: string | null) {
     if (!value) return '—';
     return new Date(value).toLocaleString();
+}
+
+function formatMoney(value: string | number | null) {
+    if (value === null || value === undefined) return '—';
+
+    const numericValue =
+        typeof value === 'number' ? value : Number.parseFloat(value);
+
+    if (Number.isNaN(numericValue)) return '—';
+
+    return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+    }).format(numericValue);
 }
 
 function badgeClasses(value: string) {
@@ -59,7 +86,7 @@ function badgeClasses(value: string) {
         return 'bg-amber-100 text-amber-800 ring-amber-200';
     }
 
-    if (normalized === 'resolved' || normalized === 'closed') {
+    if (normalized === 'resolved' || normalized === 'closed' || normalized === 'completed') {
         return 'bg-emerald-100 text-emerald-800 ring-emerald-200';
     }
 
@@ -70,7 +97,7 @@ function badgeClasses(value: string) {
     return 'bg-slate-100 text-slate-700 ring-slate-200';
 }
 
-const statusOptions = [
+const ticketStatusOptions = [
     'open',
     'vendor_assigned',
     'scheduled',
@@ -79,6 +106,8 @@ const statusOptions = [
     'closed',
 ];
 
+const workOrderStatusOptions = ['scheduled', 'in_progress', 'completed'];
+
 export default async function TicketDetailPage({
     params,
 }: {
@@ -86,7 +115,7 @@ export default async function TicketDetailPage({
 }) {
     const { tenant, id } = await params;
 
-    const [ticketResult, vendorsResult, updatesResult] = await Promise.all([
+    const [ticketResult, vendorsResult, updatesResult, workOrdersResult] = await Promise.all([
         pool.query<TicketDetailRow>(
             `
             SELECT
@@ -153,6 +182,27 @@ export default async function TicketDetailPage({
             `,
             [id]
         ),
+        pool.query<WorkOrderRow>(
+            `
+            SELECT
+              work_orders.id,
+              work_orders.vendor_id,
+              vendors.name AS vendor_name,
+              work_orders.scheduled_for,
+              work_orders.completed_at,
+              work_orders.status,
+              work_orders.labor_cost,
+              work_orders.parts_cost,
+              work_orders.notes,
+              work_orders.created_at
+            FROM work_orders
+            LEFT JOIN vendors
+              ON work_orders.vendor_id = vendors.id
+            WHERE work_orders.ticket_id = $1
+            ORDER BY work_orders.created_at DESC
+            `,
+            [id]
+        ),
     ]);
 
     const ticket = ticketResult.rows[0];
@@ -163,13 +213,14 @@ export default async function TicketDetailPage({
 
     const vendors: VendorRow[] = vendorsResult.rows;
     const updates: TicketUpdateRow[] = updatesResult.rows;
+    const workOrders: WorkOrderRow[] = workOrdersResult.rows;
 
     async function updateTicketStatus(formData: FormData) {
         'use server';
 
         const newStatus = String(formData.get('status') ?? '').trim();
 
-        if (!statusOptions.includes(newStatus)) {
+        if (!ticketStatusOptions.includes(newStatus)) {
             throw new Error('Invalid status value.');
         }
 
@@ -299,6 +350,146 @@ export default async function TicketDetailPage({
         redirect(`/${ticket.tenant_slug}/tickets/${ticket.id}`);
     }
 
+    async function createWorkOrder(formData: FormData) {
+        'use server';
+
+        const vendorId = String(formData.get('work_order_vendor_id') ?? '').trim();
+        const scheduledFor = String(formData.get('scheduled_for') ?? '').trim();
+        const status = String(formData.get('work_order_status') ?? '').trim();
+        const laborCostRaw = String(formData.get('labor_cost') ?? '').trim();
+        const partsCostRaw = String(formData.get('parts_cost') ?? '').trim();
+        const notes = String(formData.get('work_order_notes') ?? '').trim();
+
+        if (!vendorId) {
+            throw new Error('Vendor is required.');
+        }
+
+        if (!scheduledFor) {
+            throw new Error('Scheduled time is required.');
+        }
+
+        if (!workOrderStatusOptions.includes(status)) {
+            throw new Error('Invalid work order status.');
+        }
+
+        const vendorCheck = await pool.query<{ id: string; name: string }>(
+            `
+            SELECT vendors.id, vendors.name
+            FROM vendors
+            JOIN tenants ON vendors.tenant_id = tenants.id
+            WHERE vendors.id = $1
+              AND tenants.slug = $2
+            LIMIT 1
+            `,
+            [vendorId, ticket.tenant_slug]
+        );
+
+        const validVendor = vendorCheck.rows[0];
+
+        if (!validVendor) {
+            throw new Error('Invalid vendor selection.');
+        }
+
+        await pool.query(
+            `
+            INSERT INTO work_orders (
+              ticket_id,
+              vendor_id,
+              scheduled_for,
+              status,
+              labor_cost,
+              parts_cost,
+              notes
+            )
+            VALUES (
+              $1,
+              $2,
+              $3::timestamp,
+              $4,
+              CASE WHEN $5 = '' THEN NULL ELSE $5::numeric END,
+              CASE WHEN $6 = '' THEN NULL ELSE $6::numeric END,
+              CASE WHEN $7 = '' THEN NULL ELSE $7 END
+            )
+            `,
+            [
+                ticket.id,
+                vendorId,
+                scheduledFor,
+                status,
+                laborCostRaw,
+                partsCostRaw,
+                notes,
+            ]
+        );
+
+        await pool.query(
+            `
+            INSERT INTO ticket_updates (
+              ticket_id,
+              update_type,
+              note,
+              created_by
+            )
+            VALUES (
+              $1,
+              'work_order_created',
+              $2,
+              'System'
+            )
+            `,
+            [
+                ticket.id,
+                `Work order created for ${validVendor.name} with status ${status}.`,
+            ]
+        );
+
+        let newTicketStatus: string | null = null;
+
+        if (status === 'scheduled') {
+            newTicketStatus = 'scheduled';
+        } else if (status === 'in_progress') {
+            newTicketStatus = 'in_progress';
+        }
+
+        if (newTicketStatus) {
+            await pool.query(
+                `
+                UPDATE tickets
+                SET status = $1
+                WHERE id = $2
+                `,
+                [newTicketStatus, ticket.id]
+            );
+
+            await pool.query(
+                `
+                INSERT INTO ticket_updates (
+                  ticket_id,
+                  update_type,
+                  note,
+                  created_by
+                )
+                VALUES (
+                  $1,
+                  'status_change',
+                  $2,
+                  'System'
+                )
+                `,
+                [
+                    ticket.id,
+                    `Auto-updated status to ${newTicketStatus} from work order.`,
+                ]
+            );
+        }
+
+        revalidatePath(`/${ticket.tenant_slug}/dashboard`);
+        revalidatePath(`/${ticket.tenant_slug}/tickets`);
+        revalidatePath(`/${ticket.tenant_slug}/tickets/${ticket.id}`);
+
+        redirect(`/${ticket.tenant_slug}/tickets/${ticket.id}`);
+    }
+
     return (
         <main className="min-h-screen bg-slate-50 text-slate-900">
             <div className="mx-auto max-w-6xl px-6 py-10">
@@ -398,7 +589,7 @@ export default async function TicketDetailPage({
                                     defaultValue={ticket.status}
                                     className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-500 focus:outline-none"
                                 >
-                                    {statusOptions.map((status) => (
+                                    {ticketStatusOptions.map((status) => (
                                         <option key={status} value={status}>
                                             {status}
                                         </option>
@@ -541,6 +732,241 @@ export default async function TicketDetailPage({
                             </div>
                         </dl>
                     </div>
+                </section>
+
+                <section className="mt-6 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+                    <div className="mb-4">
+                        <h2 className="text-xl font-semibold">Create Work Order</h2>
+                        <p className="mt-1 text-sm text-slate-500">
+                            Create a new vendor work order tied to this ticket.
+                        </p>
+                    </div>
+
+                    <form action={createWorkOrder} className="grid gap-6 lg:grid-cols-2">
+                        <div className="space-y-4">
+                            <div>
+                                <label
+                                    htmlFor="work_order_vendor_id"
+                                    className="mb-2 block text-sm font-medium text-slate-700"
+                                >
+                                    Vendor
+                                </label>
+                                <select
+                                    id="work_order_vendor_id"
+                                    name="work_order_vendor_id"
+                                    defaultValue={ticket.vendor_id ?? ''}
+                                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-500 focus:outline-none"
+                                >
+                                    <option value="">Select vendor</option>
+                                    {vendors.map((vendor) => (
+                                        <option key={vendor.id} value={vendor.id}>
+                                            {vendor.name}
+                                            {vendor.category ? ` — ${vendor.category}` : ''}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label
+                                    htmlFor="scheduled_for"
+                                    className="mb-2 block text-sm font-medium text-slate-700"
+                                >
+                                    Scheduled For
+                                </label>
+                                <input
+                                    id="scheduled_for"
+                                    name="scheduled_for"
+                                    type="datetime-local"
+                                    required
+                                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-500 focus:outline-none"
+                                />
+                            </div>
+
+                            <div>
+                                <label
+                                    htmlFor="work_order_status"
+                                    className="mb-2 block text-sm font-medium text-slate-700"
+                                >
+                                    Work Order Status
+                                </label>
+                                <select
+                                    id="work_order_status"
+                                    name="work_order_status"
+                                    defaultValue="scheduled"
+                                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-500 focus:outline-none"
+                                >
+                                    {workOrderStatusOptions.map((status) => (
+                                        <option key={status} value={status}>
+                                            {status}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div className="grid gap-4 sm:grid-cols-2">
+                                <div>
+                                    <label
+                                        htmlFor="labor_cost"
+                                        className="mb-2 block text-sm font-medium text-slate-700"
+                                    >
+                                        Labor Cost
+                                    </label>
+                                    <input
+                                        id="labor_cost"
+                                        name="labor_cost"
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        placeholder="0.00"
+                                        className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-500 focus:outline-none"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label
+                                        htmlFor="parts_cost"
+                                        className="mb-2 block text-sm font-medium text-slate-700"
+                                    >
+                                        Parts Cost
+                                    </label>
+                                    <input
+                                        id="parts_cost"
+                                        name="parts_cost"
+                                        type="number"
+                                        step="0.01"
+                                        min="0"
+                                        placeholder="0.00"
+                                        className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-500 focus:outline-none"
+                                    />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label
+                                    htmlFor="work_order_notes"
+                                    className="mb-2 block text-sm font-medium text-slate-700"
+                                >
+                                    Notes
+                                </label>
+                                <textarea
+                                    id="work_order_notes"
+                                    name="work_order_notes"
+                                    rows={5}
+                                    placeholder="Describe the vendor work to be performed."
+                                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm focus:border-slate-500 focus:outline-none"
+                                />
+                            </div>
+
+                            <div>
+                                <button
+                                    type="submit"
+                                    className="inline-flex rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+                                >
+                                    Create Work Order
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+                </section>
+
+                <section className="mt-6 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+                    <div className="mb-4">
+                        <h2 className="text-xl font-semibold">Work Orders</h2>
+                        <p className="mt-1 text-sm text-slate-500">
+                            Vendor work tied directly to this ticket.
+                        </p>
+                    </div>
+
+                    {workOrders.length === 0 ? (
+                        <p className="text-sm text-slate-500">No work orders linked to this ticket.</p>
+                    ) : (
+                        <div className="space-y-4">
+                            {workOrders.map((workOrder) => (
+                                <div
+                                    key={workOrder.id}
+                                    className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+                                >
+                                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                        <div>
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <span className="text-sm font-semibold text-slate-900">
+                                                    Work Order {workOrder.id.slice(0, 8)}
+                                                </span>
+                                                <span
+                                                    className={`rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${badgeClasses(
+                                                        workOrder.status
+                                                    )}`}
+                                                >
+                                                    {workOrder.status}
+                                                </span>
+                                            </div>
+
+                                            <p className="mt-2 text-sm text-slate-700">
+                                                Vendor:{' '}
+                                                <span className="font-medium">
+                                                    {workOrder.vendor_name ?? 'Unassigned'}
+                                                </span>
+                                            </p>
+                                        </div>
+
+                                        <div className="text-sm text-slate-500">
+                                            Created {formatDate(workOrder.created_at)}
+                                        </div>
+                                    </div>
+
+                                    <dl className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                                        <div>
+                                            <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                                                Scheduled
+                                            </dt>
+                                            <dd className="mt-1 text-sm text-slate-900">
+                                                {formatDate(workOrder.scheduled_for)}
+                                            </dd>
+                                        </div>
+
+                                        <div>
+                                            <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                                                Completed
+                                            </dt>
+                                            <dd className="mt-1 text-sm text-slate-900">
+                                                {formatDate(workOrder.completed_at)}
+                                            </dd>
+                                        </div>
+
+                                        <div>
+                                            <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                                                Labor Cost
+                                            </dt>
+                                            <dd className="mt-1 text-sm text-slate-900">
+                                                {formatMoney(workOrder.labor_cost)}
+                                            </dd>
+                                        </div>
+
+                                        <div>
+                                            <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                                                Parts Cost
+                                            </dt>
+                                            <dd className="mt-1 text-sm text-slate-900">
+                                                {formatMoney(workOrder.parts_cost)}
+                                            </dd>
+                                        </div>
+                                    </dl>
+
+                                    <div className="mt-4">
+                                        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                                            Notes
+                                        </p>
+                                        <p className="mt-1 text-sm leading-6 text-slate-700">
+                                            {workOrder.notes ?? 'No notes provided.'}
+                                        </p>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </section>
 
                 <section className="mt-6 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
