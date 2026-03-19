@@ -6,10 +6,12 @@ import pool from '../../../../lib/db';
 type TicketDetailRow = {
     id: string;
     title: string;
+    description: string | null;
     status: string;
     priority: string;
     category: string;
     created_at: string;
+    opened_at: string | null;
     due_at: string | null;
     resolved_at: string | null;
     location_name: string;
@@ -17,11 +19,24 @@ type TicketDetailRow = {
     tenant_slug: string;
     vendor_id: string | null;
     vendor_name: string | null;
+    vendor_category: string | null;
+    asset_id: string | null;
+    asset_name: string | null;
+    asset_type: string | null;
 };
 
 type VendorRow = {
     id: string;
     name: string;
+    category: string | null;
+};
+
+type TicketUpdateRow = {
+    id: string;
+    update_type: string;
+    note: string | null;
+    created_by: string | null;
+    created_at: string;
 };
 
 function formatDate(value: string | null) {
@@ -48,6 +63,10 @@ function badgeClasses(value: string) {
         return 'bg-emerald-100 text-emerald-800 ring-emerald-200';
     }
 
+    if (normalized === 'vendor_assigned' || normalized === 'scheduled') {
+        return 'bg-blue-100 text-blue-800 ring-blue-200';
+    }
+
     return 'bg-slate-100 text-slate-700 ring-slate-200';
 }
 
@@ -67,58 +86,83 @@ export default async function TicketDetailPage({
 }) {
     const { tenant, id } = await params;
 
-    const result = await pool.query<TicketDetailRow>(
-        `
-    SELECT
-      tickets.id,
-      tickets.title,
-      tickets.status,
-      tickets.priority,
-      tickets.category,
-      tickets.created_at,
-      tickets.due_at,
-      tickets.resolved_at,
-      tickets.vendor_id,
-      locations.name AS location_name,
-      tenants.name AS tenant_name,
-      tenants.slug AS tenant_slug,
-      vendors.name AS vendor_name
-    FROM tickets
-    JOIN locations
-      ON tickets.location_id = locations.id
-    JOIN tenants
-      ON tickets.tenant_id = tenants.id
-    LEFT JOIN vendors
-      ON tickets.vendor_id = vendors.id
-    WHERE tenants.slug = $1
-      AND tickets.id = $2
-    LIMIT 1
-    `,
-        [tenant, id]
-    );
+    const [ticketResult, vendorsResult, updatesResult] = await Promise.all([
+        pool.query<TicketDetailRow>(
+            `
+            SELECT
+              tickets.id,
+              tickets.title,
+              tickets.description,
+              tickets.status,
+              tickets.priority,
+              tickets.category,
+              tickets.created_at,
+              tickets.opened_at,
+              tickets.due_at,
+              tickets.resolved_at,
+              tickets.vendor_id,
+              tickets.asset_id,
+              locations.name AS location_name,
+              tenants.name AS tenant_name,
+              tenants.slug AS tenant_slug,
+              vendors.name AS vendor_name,
+              vendors.category AS vendor_category,
+              assets.name AS asset_name,
+              assets.asset_type AS asset_type
+            FROM tickets
+            JOIN locations
+              ON tickets.location_id = locations.id
+            JOIN tenants
+              ON tickets.tenant_id = tenants.id
+            LEFT JOIN vendors
+              ON tickets.vendor_id = vendors.id
+            LEFT JOIN assets
+              ON tickets.asset_id = assets.id
+            WHERE tenants.slug = $1
+              AND tickets.id = $2
+            LIMIT 1
+            `,
+            [tenant, id]
+        ),
+        pool.query<VendorRow>(
+            `
+            SELECT id, name, category
+            FROM vendors
+            WHERE tenant_id = (
+              SELECT id
+              FROM tenants
+              WHERE slug = $1
+              LIMIT 1
+            )
+              AND active = TRUE
+            ORDER BY category ASC NULLS LAST, name ASC
+            `,
+            [tenant]
+        ),
+        pool.query<TicketUpdateRow>(
+            `
+            SELECT
+              id,
+              update_type,
+              note,
+              created_by,
+              created_at
+            FROM ticket_updates
+            WHERE ticket_id = $1
+            ORDER BY created_at DESC
+            `,
+            [id]
+        ),
+    ]);
 
-    const ticket = result.rows[0];
+    const ticket = ticketResult.rows[0];
 
     if (!ticket) {
         notFound();
     }
 
-    const vendorsResult = await pool.query<VendorRow>(
-        `
-    SELECT id, name
-    FROM vendors
-    WHERE tenant_id = (
-      SELECT id
-      FROM tenants
-      WHERE slug = $1
-      LIMIT 1
-    )
-    ORDER BY name ASC
-    `,
-        [tenant]
-    );
-
     const vendors: VendorRow[] = vendorsResult.rows;
+    const updates: TicketUpdateRow[] = updatesResult.rows;
 
     async function updateTicketStatus(formData: FormData) {
         'use server';
@@ -131,17 +175,35 @@ export default async function TicketDetailPage({
 
         await pool.query(
             `
-      UPDATE tickets
-      SET
-        status = $1,
-        resolved_at = CASE
-          WHEN $2::text IN ('resolved', 'closed') AND resolved_at IS NULL THEN NOW()
-          WHEN $3::text NOT IN ('resolved', 'closed') THEN NULL
-          ELSE resolved_at
-        END
-      WHERE id = $4
-      `,
+            UPDATE tickets
+            SET
+              status = $1,
+              resolved_at = CASE
+                WHEN $2::text IN ('resolved', 'closed') AND resolved_at IS NULL THEN NOW()
+                WHEN $3::text NOT IN ('resolved', 'closed') THEN NULL
+                ELSE resolved_at
+              END
+            WHERE id = $4
+            `,
             [newStatus, newStatus, newStatus, ticket.id]
+        );
+
+        await pool.query(
+            `
+            INSERT INTO ticket_updates (
+              ticket_id,
+              update_type,
+              note,
+              created_by
+            )
+            VALUES (
+              $1,
+              'status_change',
+              $2,
+              'System'
+            )
+            `,
+            [ticket.id, `Status changed to ${newStatus}.`]
         );
 
         revalidatePath(`/${ticket.tenant_slug}/dashboard`);
@@ -159,36 +221,74 @@ export default async function TicketDetailPage({
         if (vendorId === '') {
             await pool.query(
                 `
-        UPDATE tickets
-        SET vendor_id = NULL
-        WHERE id = $1
-        `,
+                UPDATE tickets
+                SET vendor_id = NULL
+                WHERE id = $1
+                `,
+                [ticket.id]
+            );
+
+            await pool.query(
+                `
+                INSERT INTO ticket_updates (
+                  ticket_id,
+                  update_type,
+                  note,
+                  created_by
+                )
+                VALUES (
+                  $1,
+                  'vendor_unassigned',
+                  'Vendor assignment cleared.',
+                  'System'
+                )
+                `,
                 [ticket.id]
             );
         } else {
-            const vendorCheck = await pool.query<{ id: string }>(
+            const vendorCheck = await pool.query<{ id: string; name: string }>(
                 `
-        SELECT vendors.id
-        FROM vendors
-        JOIN tenants ON vendors.tenant_id = tenants.id
-        WHERE vendors.id = $1
-          AND tenants.slug = $2
-        LIMIT 1
-        `,
+                SELECT vendors.id, vendors.name
+                FROM vendors
+                JOIN tenants ON vendors.tenant_id = tenants.id
+                WHERE vendors.id = $1
+                  AND tenants.slug = $2
+                LIMIT 1
+                `,
                 [vendorId, ticket.tenant_slug]
             );
 
-            if (!vendorCheck.rows[0]) {
+            const validVendor = vendorCheck.rows[0];
+
+            if (!validVendor) {
                 throw new Error('Invalid vendor selection.');
             }
 
             await pool.query(
                 `
-        UPDATE tickets
-        SET vendor_id = $1
-        WHERE id = $2
-        `,
+                UPDATE tickets
+                SET vendor_id = $1
+                WHERE id = $2
+                `,
                 [vendorId, ticket.id]
+            );
+
+            await pool.query(
+                `
+                INSERT INTO ticket_updates (
+                  ticket_id,
+                  update_type,
+                  note,
+                  created_by
+                )
+                VALUES (
+                  $1,
+                  'vendor_assigned',
+                  $2,
+                  'System'
+                )
+                `,
+                [ticket.id, `Vendor assigned: ${validVendor.name}.`]
             );
         }
 
@@ -201,7 +301,7 @@ export default async function TicketDetailPage({
 
     return (
         <main className="min-h-screen bg-slate-50 text-slate-900">
-            <div className="mx-auto max-w-5xl px-6 py-10">
+            <div className="mx-auto max-w-6xl px-6 py-10">
                 <div className="mb-6 flex flex-wrap items-center gap-3 text-sm">
                     <Link
                         href="/"
@@ -234,8 +334,8 @@ export default async function TicketDetailPage({
                 </div>
 
                 <header className="mb-8 rounded-2xl bg-white p-8 shadow-sm ring-1 ring-slate-200">
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                        <div>
+                    <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="max-w-3xl">
                             <p className="mb-2 text-sm font-semibold uppercase tracking-[0.2em] text-slate-500">
                                 Ticket Detail
                             </p>
@@ -248,6 +348,13 @@ export default async function TicketDetailPage({
                                 Ticket ID:{' '}
                                 <span className="font-medium text-slate-700">{ticket.id}</span>
                             </p>
+
+                            <div className="mt-5 rounded-xl bg-slate-50 p-4 ring-1 ring-slate-200">
+                                <p className="text-sm font-medium text-slate-500">Description</p>
+                                <p className="mt-2 text-sm leading-6 text-slate-700">
+                                    {ticket.description ?? 'No description provided.'}
+                                </p>
+                            </div>
                         </div>
 
                         <div className="flex flex-wrap gap-2">
@@ -332,6 +439,7 @@ export default async function TicketDetailPage({
                                     {vendors.map((vendor) => (
                                         <option key={vendor.id} value={vendor.id}>
                                             {vendor.name}
+                                            {vendor.category ? ` — ${vendor.category}` : ''}
                                         </option>
                                     ))}
                                 </select>
@@ -367,9 +475,22 @@ export default async function TicketDetailPage({
                             </div>
 
                             <div>
+                                <dt className="text-sm font-medium text-slate-500">Asset</dt>
+                                <dd className="mt-1 text-base text-slate-900">
+                                    {ticket.asset_name
+                                        ? `${ticket.asset_name}${ticket.asset_type ? ` (${ticket.asset_type})` : ''
+                                        }`
+                                        : 'No asset linked'}
+                                </dd>
+                            </div>
+
+                            <div>
                                 <dt className="text-sm font-medium text-slate-500">Vendor</dt>
                                 <dd className="mt-1 text-base text-slate-900">
                                     {ticket.vendor_name ?? 'Unassigned'}
+                                    {ticket.vendor_category
+                                        ? ` — ${ticket.vendor_category}`
+                                        : ''}
                                 </dd>
                             </div>
 
@@ -399,6 +520,13 @@ export default async function TicketDetailPage({
                             </div>
 
                             <div>
+                                <dt className="text-sm font-medium text-slate-500">Opened</dt>
+                                <dd className="mt-1 text-base text-slate-900">
+                                    {formatDate(ticket.opened_at)}
+                                </dd>
+                            </div>
+
+                            <div>
                                 <dt className="text-sm font-medium text-slate-500">Due</dt>
                                 <dd className="mt-1 text-base text-slate-900">
                                     {formatDate(ticket.due_at)}
@@ -413,6 +541,47 @@ export default async function TicketDetailPage({
                             </div>
                         </dl>
                     </div>
+                </section>
+
+                <section className="mt-6 rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
+                    <div className="mb-4">
+                        <h2 className="text-xl font-semibold">Activity Timeline</h2>
+                        <p className="mt-1 text-sm text-slate-500">
+                            Recorded updates and workflow activity for this ticket.
+                        </p>
+                    </div>
+
+                    {updates.length === 0 ? (
+                        <p className="text-sm text-slate-500">No activity recorded yet.</p>
+                    ) : (
+                        <div className="space-y-4">
+                            {updates.map((update) => (
+                                <div
+                                    key={update.id}
+                                    className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+                                >
+                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <span className="rounded-full bg-slate-200 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-slate-700">
+                                                {update.update_type}
+                                            </span>
+                                            <span className="text-sm font-medium text-slate-700">
+                                                {update.created_by ?? 'Unknown'}
+                                            </span>
+                                        </div>
+
+                                        <span className="text-xs text-slate-500">
+                                            {formatDate(update.created_at)}
+                                        </span>
+                                    </div>
+
+                                    <p className="mt-3 text-sm leading-6 text-slate-700">
+                                        {update.note ?? 'No note provided.'}
+                                    </p>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </section>
 
                 <div className="mt-8">
